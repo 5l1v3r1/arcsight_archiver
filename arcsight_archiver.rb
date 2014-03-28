@@ -20,13 +20,13 @@ require 'digest/md5'
 class Check
 
   #
-  # Check Source disk usage
+  # Check given path disk usage
   #
-  def source_du(src, src_max_size)
+  def disk_usage(path, max_size)
 
-    return false unless Dir.exist?(src)
+    return false unless File.exists?(path)
 
-    if  current_size(src) >= src_max_size.to_i
+    if current_size(path) >= max_size.to_i
       false
     else
       true
@@ -34,23 +34,9 @@ class Check
 
   end
 
-  #
-  # Check destination disk usage
-  #
-  def destination_du(dst, dst_max_size)
-
-    return false unless File.exists?(dst)
-
-    if current_size(dst) >= dst_max_size.to_i
-      false
-    else
-      true
-    end
-
-  end
 
   #
-  # Check the size(Mb) of the path
+  # Check the size(MB) of the path
   #
   def current_size(path)
     `du -shm #{path}`.match(/^[0-9]+/).to_s.to_i
@@ -87,13 +73,13 @@ end # Check
 class Notify
   include HTML
 
-  def initialize
+  def initialize(smtp_server, port, from_email, to_email, cc='', subject)
     @smtp_server  = "localhost"                                             # Put your smtp server here
     @port         = 25                                                      # SMTP port
-    @from_email   = "ssaleh@advancedoperations.com"                       	# Sender e-mail
+    @from_email   = "arcsight@mohe.gov.sa"                       	# Sender e-mail
     @to_email     = "sabri@security4arabs.net"                              # Receiver e-mail
     @cc           = "king.sabri@gmail.com"                                  # Comment this line if there is no Cc
-    @subject      = "Malware alert! - #{Time.new.strftime("%d-%m-%Y")}"     # e-mail's Subject - date
+    @subject      = "ArcSight Archiver - #{Time.new.strftime("%d-%m-%Y")}"     # e-mail's Subject - date
     @mime         = "MIME-Version: 1.0"
     @content_type = "Content-type: text/html"
   end
@@ -107,8 +93,8 @@ class Notify
   end
 
   def message(full_result)
-    ip_address     = ""
-    file_name      = ""
+    source      = ""
+    destination = ""
     result         = ""
     url            = ""
     date           = Time.new.strftime("%d-%m-%Y")
@@ -168,8 +154,7 @@ class ArcsightArchiver
   # return Array of days between 20140327...20140126
   #
   def keep_days
-    today = Time.new
-    today = today.strftime('%Y%m%d')
+    today = Time.new.strftime('%Y%m%d')
     from_date = Date.parse today
     to_date = (from_date + 1) - @keep_days.to_i # +1 added to from_date to exclude the last day from range
 
@@ -181,9 +166,36 @@ class ArcsightArchiver
   #
   def move(src, dst)
     # Move should copy first then delete after copying is successfull!
+    #FileUtils.cp_r(src, dst, :remove_destination => true).nil?
     FileUtils.rm_rf(src) if FileUtils.cp_r(src, dst, :remove_destination => true).nil?
   rescue Exception => e
     puts e
+  end
+
+  #
+  # Log function
+  #
+  def log(level_num, message)
+    time = Time.new.strftime('%Y-%m-%d %H:%M')
+
+    File.open(@log_file, 'a') { |f| f.puts("#{time} | #{level(level_num)} | #{message}") }
+
+  end
+
+  protected
+  def level(num)
+    level= {
+        1 => 'alert',
+        2 => 'critical',
+        3 => 'error',
+        4 => 'warning',
+        5 => 'notice',
+        6 => 'info',
+        7 => 'debug'
+
+    }
+
+    level[num]
   end
 
 end
@@ -201,13 +213,16 @@ max_src_disk_usage = config[ 'main' ][ 'max_src_disk_usage' ]
 max_dst_disk_usage = config[ 'main' ][ 'max_dst_disk_usage' ]
 keep_days = config[ 'main' ][ 'keep_last_days' ]
 log_file = config[ 'main' ][ 'log_file' ]
-from_email_email = config[ 'notifications' ][ 'from_email' ]
+smtp_server = config['notifications']['smtp_server']
+from_email = config[ 'notifications' ][ 'from_email' ]
 to_email = config[ 'notifications' ][ 'to_email' ]
+cc_email = 'securityteam@mail.com'
 subject_email = config[ 'notifications' ][ 'subject_email' ]
 
 
-
-
+#
+# Run
+#
 begin
   check = Check.new
   archiver = ArcsightArchiver.new(
@@ -215,20 +230,21 @@ begin
       max_src_disk_usage,
       max_dst_disk_usage,
       log_file, keep_days)
+  notify = Notify.new(smtp_server, from_email, to_email, subject_email)
 
-  if check.source_du(source, max_src_disk_usage) && check.destination_du(destination, max_dst_disk_usage)
-    #archiver.move(source, destination)
-
+  if check.disk_usage(source, max_src_disk_usage) && check.disk_usage(destination, max_dst_disk_usage)
+    # exclude the keep_days from moving to destination
     move = check.ls(source) - archiver.keep_days
+
     move.each do |file|
       archiver.move "#{source}/#{file}", destination
     end
-
   else
-    puts "Source or Destination doesn't have enough space!"
+    archiver.log 3, "Source or Destination doesn't have enough space!"
   end
+
 rescue Exception => e
-  puts e
+  archiver.log 2, 'Something goes wrong'
 end
 
 
