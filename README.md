@@ -1,6 +1,9 @@
-===Arcsight Archiver===
+Arcsight Archiver
+==================
+Backing up your ArcSight archive
 
-==Issue description==
+Issue description
+---------------------------------
 Arcsight has an issue in archiving which is limit archiving space to 200GB even you have more space!.
 The script will move taken archives to another place you specify.
 
@@ -9,6 +12,13 @@ The script will move taken archives to another place you specify.
 * You can specify email for notifications
 
 
+Requirements
+------------
+**From rubygems**
+        gem install parseconfig html-table
+**Local gem installation**
+        gem install parseconfig
+        gem install html-table
 
 
 To Configure mail server
@@ -23,3 +33,6 @@ Fetching: icalendar-1.5.2.gem (100%)
 Successfully installed viewpoint-0.1.27
 Done installing documentation for handsoap, httpclient, icalendar, rubyntlm, viewpoint after 6 seconds
 5 gems installed
+
+
+
