@@ -15,8 +15,11 @@ The script will move taken archives to another place you specify.
 Requirements
 ------------
 **From rubygems**
+
         gem install parseconfig html-table
+
 **Local gem installation**
+
         gem install parseconfig
         gem install html-table
 
