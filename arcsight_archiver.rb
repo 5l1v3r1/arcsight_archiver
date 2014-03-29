@@ -20,12 +20,14 @@ require 'digest/md5'
 class Check
 
   #
-  # Check given path disk usage
+  # Check given path disk usage. return false if size >= maximum
   #
-  def disk_usage(path, max_size)
+  def disk_usage(path, max_size, create = false)
 
-    return false unless File.exists?(path)
-
+    # TODO add option to create destination if not exists
+    if create == true
+      FileUtils.mkdir_p(path) unless File.exists?(path)
+    end
     if current_size(path) >= max_size.to_i
       false
     else
@@ -33,7 +35,6 @@ class Check
     end
 
   end
-
 
   #
   # Check the size(MB) of the path
@@ -84,29 +85,22 @@ class Notify
     @content_type = "Content-type: text/html"
   end
 
-  def error
 
-  end
-
-  def success
-
-  end
-
-  def message(full_result)
+  def message(contents)
     source      = ""
     destination = ""
     result         = ""
-    url            = ""
     date           = Time.new.strftime("%d-%m-%Y")
     table_contents = [["<strong>Archive name</strong>"]]
 
-    full_result.each do |res|
+    contents.each do |content|
       ip_address = res[0]
       file_name  = res[1]
       result     = res[2]
-      url        = res[5]
-      table_contents << [ip_address , file_name , result , url , date]
+      table_contents << [ip_address , file_name , result , date]
     end
+
+    # Table settings
     table = Table.new(table_contents)
     table.border     = 1
     table[0].align   = "CENTER"
@@ -169,7 +163,7 @@ class ArcsightArchiver
     #FileUtils.cp_r(src, dst, :remove_destination => true).nil?
     FileUtils.rm_rf(src) if FileUtils.cp_r(src, dst, :remove_destination => true).nil?
   rescue Exception => e
-    puts e
+    log 3, e
   end
 
   #
@@ -179,12 +173,12 @@ class ArcsightArchiver
     time = Time.new.strftime('%Y-%m-%d %H:%M')
 
     File.open(@log_file, 'a') { |f| f.puts("#{time} | #{level(level_num)} | #{message}") }
-
   end
 
   protected
   def level(num)
-    level= {
+    level =
+        {
         1 => 'alert',
         2 => 'critical',
         3 => 'error',
@@ -192,20 +186,18 @@ class ArcsightArchiver
         5 => 'notice',
         6 => 'info',
         7 => 'debug'
-
-    }
+        }
 
     level[num]
   end
 
-end
+end # ArcsightArchiver
 
 
 
-
-#
-# Settings - Config file
-#
+#                        #
+# Settings - Config file #
+#                        #
 config = ParseConfig.new('./arcsight_archiver.config')
 source = config[ 'main' ][ 'archive_source' ]
 destination = config[ 'main' ][ 'archive_destination' ]
@@ -216,7 +208,7 @@ log_file = config[ 'main' ][ 'log_file' ]
 smtp_server = config['notifications']['smtp_server']
 from_email = config[ 'notifications' ][ 'from_email' ]
 to_email = config[ 'notifications' ][ 'to_email' ]
-cc_email = 'securityteam@mail.com'
+cc_email = config[ 'notifications' ][ 'cc_email' ]
 subject_email = config[ 'notifications' ][ 'subject_email' ]
 
 
@@ -224,43 +216,62 @@ subject_email = config[ 'notifications' ][ 'subject_email' ]
 # Run
 #
 begin
+
   check = Check.new
   archiver = ArcsightArchiver.new(
       source, destination,
       max_src_disk_usage,
       max_dst_disk_usage,
       log_file, keep_days)
-  notify = Notify.new(smtp_server, from_email, to_email, subject_email)
+  notify = Notify.new(smtp_server, from_email, to_email, cc_email, subject_email)
+
+  puts check.disk_usage(source, max_src_disk_usage) && check.disk_usage(destination, max_dst_disk_usage)
+
+=begin
+  check if source is getting full
+if yes then move from source to dest
+if not full log/notify thant not need to backup
+if full log/notify and move the unwanted archives
+=end
+
+
+  if !check.disk_usage(source, max_src_disk_usage)
+
+    if check.disk_usage(destination, max_dst_disk_usage)
+      move = check.ls(source) - archiver.keep_days
+      move.each do |file|
+        archiver.move "#{source}/#{file}", destination
+      end
+
+    elsif !check.disk_usage(destination, max_dst_disk_usage)
+      archiver.log 3, 'Destination disk is full, please release some spaces'
+    end
+
+  else
+
+  end
+
+
 
   if check.disk_usage(source, max_src_disk_usage) && check.disk_usage(destination, max_dst_disk_usage)
     # exclude the keep_days from moving to destination
     move = check.ls(source) - archiver.keep_days
 
+    puts move
+
     move.each do |file|
       archiver.move "#{source}/#{file}", destination
     end
+
+    #message = notify.message(move)
+    #notify.send_mail message
+
   else
     archiver.log 3, "Source or Destination doesn't have enough space!"
   end
 
 rescue Exception => e
-  archiver.log 2, 'Something goes wrong'
+  archiver.log 2, e
 end
-
-
-
-
-
-#date = Date.parse '20140111'
-## subtract 2 months
-##(date << 2).strftime('%Y%m%d')
-#( date - 60 ).strftime('%Y%m%d')
-#
-## All days
-#date1 = Date.parse '20140111'
-#date2 = ( date1 - DAYS )
-#(date2..date1).map do |date|
-#  "Date: #{date.strftime('%Y%m%d')}"
-#end
 
 
