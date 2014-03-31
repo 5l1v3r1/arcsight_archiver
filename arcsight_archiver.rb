@@ -1,4 +1,4 @@
-#!/usr/bin/env ruby
+#!/usr/bin/ruby193-ruby
 #
 # Arcsight has an issue in archiving which is limit archiving space to 200GB even you have more space!.
 # The script will move taken archives to another place you specify
@@ -15,6 +15,8 @@ require 'time'
 require 'date'
 require 'pp'
 require 'digest/md5'
+require 'viewpoint'
+
 
 
 class Check
@@ -44,22 +46,8 @@ class Check
   end
 
   #
+  # Just simple ls -S1
   #
-  #
-  def integrity(src, dst)
-    Dir.glob('/opt/arcsight/logger/data/archives_backup/20140223/*') {|f| puts f}
-  end
-
-
-  def md5(src, dst)
-    case
-      when Digest::MD5.hexdigest(src) == Digest::MD5.hexdigest(dst)
-        true
-      when Digest::MD5.hexdigest(src) != Digest::MD5.hexdigest(dst)
-        false
-    end
-  end
-
   def ls(path)
     files = []
     Dir.glob("#{path}/*") {|f| files << f.split('/').last}
@@ -73,16 +61,32 @@ end # Check
 
 class Notify
   include HTML
+  include Viewpoint
 
-  def initialize(smtp_server, port, from_email, to_email, cc='', subject)
-    @smtp_server  = "localhost"                                             # Put your smtp server here
-    @port         = 25                                                      # SMTP port
-    @from_email   = "arcsight@mohe.gov.sa"                       	# Sender e-mail
-    @to_email     = "sabri@security4arabs.net"                              # Receiver e-mail
-    @cc           = "king.sabri@gmail.com"                                  # Comment this line if there is no Cc
-    @subject      = "ArcSight Archiver - #{Time.new.strftime("%d-%m-%Y")}"     # e-mail's Subject - date
-    @mime         = "MIME-Version: 1.0"
-    @content_type = "Content-type: text/html"
+  def initialize(mail_server, username, password, to_email, cc)
+    @endpoint = "https://#{mail_server}/ews/Exchange.asmx"
+    @username = username
+    @password = password
+    @to_email = to_email.split(',')
+    @cc       = cc.split(',')
+  end
+
+  #
+  #
+  #
+  def send_mail(subject, body)
+
+    subject_ = "ArcSight Archiver | #{subject} - #{Time.new.strftime("%d-%m-%Y")}"
+
+    EWS::EWS.endpoint = @endpoint
+    EWS::EWS.set_auth(@username, @password)
+    message = EWS::Message
+
+    if @cc.nil? || @cc.empty?
+      message.send(subject_, body, @to_email)
+    else
+      message.send(subject_, body, @to_email, @cc)
+    end
   end
 
 
@@ -94,9 +98,9 @@ class Notify
     table_contents = [["<strong>Archive name</strong>"]]
 
     contents.each do |content|
-      ip_address = res[0]
-      file_name  = res[1]
-      result     = res[2]
+      ip_address = content[0]
+      file_name  = content[1]
+      result     = content[2]
       table_contents << [ip_address , file_name , result , date]
     end
 
@@ -108,21 +112,6 @@ class Notify
     body             = table.html
 
     return body
-  end
-
-  def send_mail(message)
-    Net::SMTP.start(@smtp_server, @port) do |smtp|
-      smtp.set_debug_output $stderr
-      smtp.open_message_stream(@from_email, @to_email) do |f|
-        f.puts "From: #{@from_email}"
-        f.puts "To: #{@to_email}"
-        f.puts "Cc: #{@cc}"                                 # Comment this line if there is no Cc
-        f.puts "Subject: #{@subject}"
-        f.puts @mime
-        f.puts @content_type
-        f.puts "#{message}"
-      end
-    end
   end
 
 end
@@ -175,7 +164,7 @@ class ArcsightArchiver
     File.open(@log_file, 'a') { |f| f.puts("#{time} | #{level(level_num)} | #{message}") }
   end
 
-  protected
+
   def level(num)
     level =
         {
@@ -205,11 +194,13 @@ max_src_disk_usage = config[ 'main' ][ 'max_src_disk_usage' ]
 max_dst_disk_usage = config[ 'main' ][ 'max_dst_disk_usage' ]
 keep_days = config[ 'main' ][ 'keep_last_days' ]
 log_file = config[ 'main' ][ 'log_file' ]
-smtp_server = config['notifications']['smtp_server']
-from_email = config[ 'notifications' ][ 'from_email' ]
+
+mail_server = config['notifications']['mail_server']
+username = config[ 'notifications' ][ 'username' ].split('@').first
+password = config[ 'notifications' ][ 'password' ]
 to_email = config[ 'notifications' ][ 'to_email' ]
 cc_email = config[ 'notifications' ][ 'cc_email' ]
-subject_email = config[ 'notifications' ][ 'subject_email' ]
+
 
 
 #
@@ -223,18 +214,12 @@ begin
       max_src_disk_usage,
       max_dst_disk_usage,
       log_file, keep_days)
-  notify = Notify.new(smtp_server, from_email, to_email, cc_email, subject_email)
 
-  puts check.disk_usage(source, max_src_disk_usage) && check.disk_usage(destination, max_dst_disk_usage)
-
-=begin
-  check if source is getting full
-if yes then move from source to dest
-if not full log/notify thant not need to backup
-if full log/notify and move the unwanted archives
-=end
+  notify = Notify.new(mail_server, username, password, to_email, cc_email)
 
 
+
+  # Check if source getting full , then start taking backup
   if !check.disk_usage(source, max_src_disk_usage)
 
     if check.disk_usage(destination, max_dst_disk_usage)
@@ -243,35 +228,22 @@ if full log/notify and move the unwanted archives
         archiver.move "#{source}/#{file}", destination
       end
 
+      #notify.send_mail 'Archives have been backed up'
+
     elsif !check.disk_usage(destination, max_dst_disk_usage)
       archiver.log 3, 'Destination disk is full, please release some spaces'
+      notify.send_mail(archiver.level(3), "Error: Destination disk is full, please release some spaces")
     end
 
   else
-
+    archiver.log 6, "Source or Destination doesn't have enough space!"
+    notify.send_mail(archiver.level(6), "Source or Destination doesn't have enough space!")
   end
 
-
-
-  if check.disk_usage(source, max_src_disk_usage) && check.disk_usage(destination, max_dst_disk_usage)
-    # exclude the keep_days from moving to destination
-    move = check.ls(source) - archiver.keep_days
-
-    puts move
-
-    move.each do |file|
-      archiver.move "#{source}/#{file}", destination
-    end
-
-    #message = notify.message(move)
-    #notify.send_mail message
-
-  else
-    archiver.log 3, "Source or Destination doesn't have enough space!"
-  end
 
 rescue Exception => e
   archiver.log 2, e
+  notify.send_mail(archiver.level(2), "#{e}")
 end
 
 
